@@ -7,11 +7,9 @@ from keras.models import Sequential, Model
 from keras.layers import Dense, Input
 from keras.layers.normalization import BatchNormalization
 from keras.layers.core import Lambda
-from keras.layers.convolutional import Conv1D, Conv2D
 from keras.layers import TimeDistributed
 from keras.layers import LSTM, GRU, SimpleRNN
 from keras.layers.wrappers import  Bidirectional
-from keras.callbacks import LearningRateScheduler
 from keras import regularizers
 from keras.engine.topology import Layer
 import matplotlib
@@ -20,11 +18,7 @@ import matplotlib.pyplot as plt
 from keras import backend as K
 from keras.engine import Layer
 import scipy.io as sio
-import matplotlib
-import h5py
-import pickle
-import sys
-import time
+import matplotlib, h5py, pickle, sys, time
 
 
 ################################
@@ -39,60 +33,40 @@ print '[Test][Warining] Restrict GPU memory usage to 60%'
 # Arguments
 n_inp = sys.argv[1:]
 
-if '-lr' in n_inp:
-    ind1 = n_inp.index('-lr')
-    learning_rate = float(n_inp[ind1+1])
-
- 
 if '-coderate' in n_inp:
     ind1 = n_inp.index('-coderate')
     coderate = int(n_inp[ind1+1])
 else:
     coderate = 3
-  
-nettype = 'rnn'
  
 if '-tx' in n_inp:
     ind1 = n_inp.index('-tx')
     num_hunit_rnn_tx = int(n_inp[ind1+1])
 else:
     num_hunit_rnn_tx = 50
- 
 if '-rx' in n_inp:
     ind1 = n_inp.index('-rx')
     num_hunit_rnn_rx = int(n_inp[ind1+1])
 else:
-    num_hunit_rnn_rx = 50
- 
-if '-howmany' in n_inp:
-    ind1 = n_inp.index('-howmany')
-    howmany = int(n_inp[ind1+1])
-else:
-    howmany = 10
+    num_hunit_rnn_rx = 50 
+print 'Tx hidden nodes:', num_hunit_rnn_tx
+print 'Rx hidden nodes:', num_hunit_rnn_rx
+
 
 if '-len' in n_inp:
     ind1      = n_inp.index('-len')
     bit_length = int(n_inp[ind1+1])
 else:
     bit_length = 51 # Number of bits including one (for zero padding)
-    print bit_length
+print 'Block length: ', bit_length
 
-# Whether to run Understanding code (us.py)
-run_us = True
-learning_rate = 0.02
-
- 
-if '-fs' in n_inp:
+if '-fs' in n_inp: # Noisy feedback
     ind1      = n_inp.index('-fs')
     fsSNR = float(n_inp[ind1+1])
-else:
-    fsSNR = 20
-
-if fsSNR == 20: # fsSNR = 20 means noiseless feedback
-    feedback_sigma = 0
-else:
     feedback_sigma = 10**(-fsSNR*1.0/20)
-
+else:
+    fsSNR = 20 # fsSNR = 20 means noiseless feedback
+    feedback_sigma = 0
 
 if '-ns' in n_inp:
     ind1      = n_inp.index('-ns')
@@ -101,8 +75,6 @@ if '-ns' in n_inp:
 else:
     nsSNR = 0
     noise_sigma = 10**(-nsSNR*1.0/20)
- 
-  
 print 'SNR of forward channel: ', nsSNR
 print 'SNR of feedback channel: ', fsSNR
 
@@ -112,11 +84,16 @@ if '-k' in n_inp:
 	k = int(n_inp[ind1+1])
 else: 
         k = bit_length*200000 # length of total message bits for testing.
-
 print 'Total number of bits for testing: ', k
-    
+
+if '-noncausal' in n_inp:
+    causal = False
+else:
+    causal = True        
+print 'Causality: ', causal
+
  
-class ScaledLayer(Layer): # a scaled layer
+class ScaledLayer(Layer): # Power Allocation Layer
     def __init__(self, **kwargs):
         super(ScaledLayer, self).__init__(**kwargs)
     def build(self, input_shape):
@@ -128,28 +105,27 @@ class ScaledLayer(Layer): # a scaled layer
         self.W3 = self.add_weight(name = 'power_weight2', shape=(1,), # Power allocation for parity 2 stream
                                  initializer='ones', trainable=True)
          
-        self.b1 = self.add_weight(name = 'b1', shape=(1,), 
-                                 initializer='ones', trainable=True) # Power allocation for 1st bit
-        self.b2 = self.add_weight(name = 'b2', shape=(1,), 
-                                 initializer='ones', trainable=True) # Power allocation for 2nd bit
-        self.b3 = self.add_weight(name = 'b3', shape=(1,), 
-                                 initializer='ones', trainable=True) # Power allocation for 3rd bit
-        self.b4 = self.add_weight(name = 'b4', shape=(1,), 
-                                 initializer='ones', trainable=True) # Power allocation for 4th bit
-        self.b5 = self.add_weight(name = 'b5', shape=(1,), 
-                                 initializer='ones', trainable=True) # Power allocation for 5th bit
- 
         self.g1 = self.add_weight(name = 'g1', shape=(1,), 
-                                 initializer='ones', trainable=True) # Power allocation for bit_length - 
+                                 initializer='ones', trainable=True) # Power allocation for 1st bit
         self.g2 = self.add_weight(name = 'g2', shape=(1,), 
-                                 initializer='ones', trainable=True)
+                                 initializer='ones', trainable=True) # Power allocation for 2nd bit
         self.g3 = self.add_weight(name = 'g3', shape=(1,), 
-                                 initializer='ones', trainable=True)
+                                 initializer='ones', trainable=True) # Power allocation for 3rd bit
         self.g4 = self.add_weight(name = 'g4', shape=(1,), 
-                                 initializer='ones', trainable=True)
+                                 initializer='ones', trainable=True) # Power allocation for 4th bit
  
- 
-        super(ScaledLayer, self).build(input_shape)  # Be sure to call this somewhere!
+        self.b1 = self.add_weight(name = 'b1', shape=(1,), 
+                                 initializer='ones', trainable=True) # Power allocation for last-4 bit
+        self.b2 = self.add_weight(name = 'b2', shape=(1,), 
+                                 initializer='ones', trainable=True) # Power allocation for last-3 bit
+        self.b3 = self.add_weight(name = 'b3', shape=(1,), 
+                                 initializer='ones', trainable=True) # Power allocation for last-2 bit
+        self.b4 = self.add_weight(name = 'b4', shape=(1,), 
+                                 initializer='ones', trainable=True) # Power allocation for last-1 bit
+        self.b5 = self.add_weight(name = 'b5', shape=(1,), 
+                                 initializer='ones', trainable=True) # Power allocation for last bit
+  
+        super(ScaledLayer, self).build(input_shape)
     def call(self, x, mask=None):
         sys = tf.reshape(tf.multiply(x[:,:,0], self.W),[tf.shape(x)[0],tf.shape(x)[1],1])
         par1 = tf.reshape(tf.multiply(x[:,:,1], self.W2),[tf.shape(x)[0],tf.shape(x)[1],1])
@@ -168,13 +144,12 @@ class ScaledLayer(Layer): # a scaled layer
                             ], axis=1)
  
         cats_mean, cats_var = tf.nn.moments(cats,[0])
-        print cats_mean.shape
-        print cats_var.shape
         rem = bit_length-9.0
  
         adj = bit_length*1.0/(bit_length)
         den = (rem + self.g1**2 + self.g2**2 + self.g3**2 + self.g4**2 + self.b1**2 + self.b2**2 + self.b3**2 + self.b4**2 + self.b5**2)*(self.W**2+self.W2**2+self.W3**2)
         return tf.sqrt(3.0*bit_length/den)*cats
+
     def get_output_shape_for(self, input_shape):
         a_shape = input_shape
         return (a_shape[0], a_shape[1], a_shape[2])
@@ -183,31 +158,6 @@ class ScaledLayer(Layer): # a scaled layer
         a_shape = input_shape
         return (a_shape[0], a_shape[1], a_shape[2])
  
-
-# Setup LR decay
-def scheduler(epoch):
- 
-    if epoch > 2 and epoch <=3:
-        print 'changing by /10 lr'
-        lr = learning_rate/10.0
-    elif epoch >3 and epoch <=5:
-        print 'changing by /100 lr'
-        lr = learning_rate/100.0
-    elif epoch >5 and epoch <=7:
-        print 'changing by /1000 lr'
-        lr = learning_rate/1000.0
-    elif epoch > 7:
-        print 'changing by /10000 lr'
-        lr = learning_rate/10000.0
-    else:
-        lr = learning_rate
- 
-    return lr
- 
-change_lr = LearningRateScheduler(scheduler)
- 
-print 'Tx hidden nodes:', num_hunit_rnn_tx
-print 'Rx hidden nodes:', num_hunit_rnn_rx
  
 # Encoder. Single Directional. One layer RNN
 f1 = SimpleRNN(name='simple_rnn_1', units=num_hunit_rnn_tx, activation='tanh', return_sequences=True, dropout=1.0)
@@ -221,188 +171,98 @@ f7 = BatchNormalization(name='batch_normalization_2')
 f8 = TimeDistributed(Dense(1, activation='sigmoid'), name='time_distributed_1')
  
 
+# Loss used for training: Binary crossentropy over all bits except for the zero padding
+def customLoss(y_true,y_pred):
+    y_true_50 = y_true[:,0:bit_length-1,:]
+    y_pred_50 = y_pred[:,0:bit_length-1,:]     
+    return K.binary_crossentropy(y_true_50, y_pred_50)
+
 # Errors used for training: ignoring the error on the zero padded bits
 def errors(y_true, y_pred):
     y_true_50 = y_true[:,0:bit_length-1,:]
     y_pred_50 = y_pred[:,0:bit_length-1,:]
- 
     myOtherTensor = K.not_equal(y_true_50, K.round(y_pred_50))
     return K.mean(tf.cast(myOtherTensor, tf.float32))
  
-
-if '-causal' in n_inp:
-    ind1 = n_inp.index('-causal')
-    causal = True
-else:
-    causal = True
- 
+# Normalization layer of the encoder
 def normalize(x):
-    if causal == False:
+    if causal == False: # Average over batches
         x_mean, x_var = tf.nn.moments(x,[0])
-    else:
+    else: # Load pre-computed mean/variance for normalization 
         id = str(bit_length)+'_'+str(fsSNR)+'_'+str(nsSNR)
-	if '-pid' in n_inp:
-		ind1 = n_inp.index('-pid')
-		id = str(n_inp[ind1+1])
-		print 'str(bit_length)+_+str(fsSNR)+_+str(nsSNR) is ', id
-        with open('meanvar_'+id+'.pickle') as g:  # Python 3: open(..., 'wb')
+        with open('meanvar/meanvar_'+id+'.pickle') as g:  # Python 3: open(..., 'wb')
             mean1, var1 = pickle.load(g)
-
         x_mean = tf.Variable(mean1, tf.float32)
         x_var = tf.Variable(var1, tf.float32)
        
     x = (x-x_mean)*1.0/tf.sqrt(x_var)
     return x
  
-def concat0(x):
-    #print tf.shape(x)
-    padding = tf.zeros([tf.shape(x)[0],tf.shape(x)[1],1], tf.float32)
-    return K.concatenate([x, padding])
-    #return K.concatenate([x,tf.cast(tf.zeros(tf.shape(x)[0],tf.shape(x)[1],1),tf.float32)])
-    #return tf.cast(tf.zeros(bit_length,1),tf.float32)
- 
+# coderate. takeNoise
+def takeNoise(x):
+    return tf.reshape(x[:,:,coderate+1:2*coderate+1],[tf.shape(x[:,:,0])[0],bit_length,coderate]) # 4 - N_i // 5 - M_i // 6 - O_i  
+# takeBit. BPSK modulation
+def takeBit(x):
+    return tf.reshape(2*x[:,:,0]-1,[tf.shape(x[:,:,0])[0],bit_length,1])
+
 def concat(x):
     return K.concatenate(x)
  
- 
-def sum2(x):
-    return tf.reshape(x[:,:,0]+x[:,:,1],[tf.shape(x[:,:,0])[0],bit_length,1])
- 
-# coderate. takeNoise
-def takeNoise(x):
-    return tf.reshape(x[:,:,coderate+1:2*coderate+1],[tf.shape(x[:,:,0])[0],bit_length,coderate]) # 3 - noise1. 4 - noise2. 
- 
-# takeBit. always the same
-def takeBit(x):
-    return tf.reshape(2*x[:,:,0]-1,[tf.shape(x[:,:,0])[0],bit_length,1])
- 
- 
- 
-delay_array = np.array(range(0,bit_length))
- 
- 
 inputs = Input(shape=(bit_length, 2*coderate+1))
- 
- 
 x = inputs
- 
-# Easiest Rate 1/4. Generate all three parities together...
+
+# Take input for parity generation
 def split_data_input_noisedelay(x):
-    x1 = x[:,:,0:coderate+1] # 0 - bits. 1 - noise1. 2 - noise2.
+    x1 = x[:,:,0:coderate+1] # E.g., for coderate=3: 0 - b_i // 1 - N_i in Phase I // 2 - M_{i-1} in Phase II // 3 - O_{i-1} in Phase II.
     return x1
  
-parity = f3(f1(Lambda(split_data_input_noisedelay)(x)))
-norm_parity = Lambda(normalize)(parity)
+parity = f3(f1(Lambda(split_data_input_noisedelay)(x))) # Generate parity based on message bits and Phase I noise and delayed Phase II noise
+norm_parity = Lambda(normalize)(parity) # Normalize the parity
+codeword = Lambda(concat)([Lambda(takeBit)(x),norm_parity]) # Codeword: raw bits and normalized parity
+powerd_codeword = ScaledLayer(name='noload_abr')(codeword) # Codeword after Power Allocation
+
+noise = Lambda(takeNoise)(x)
+noisy_received = keras.layers.add([powerd_codeword,noise]) # Received value: Sum of noise & codeword 
+predictions = f8(f7(f6(f5(f4(noisy_received))))) # Decoder output
  
-codeword = Lambda(concat)([Lambda(takeBit)(x),norm_parity])
- 
-powerd_codeword = ScaledLayer(name='noload_abr')(codeword)
- 
- 
- 
- 
-noise = Lambda(takeNoise)(x) # Take Noise
- 
-noisy_received = keras.layers.add([powerd_codeword,noise]) # Sum Noise and the Codeword
- 
- 
-#noisy_received = Lambda(concat)([norm_codeword, noise])
-#noisy_received = sum2(noisy_received)
- 
-'''
-print noisy_received.shape[0]
-print noisy_received.shape[1]
-print noisy_received.shape[2]
-'''
- 
-x = noisy_received#Lambda(concat0)(noisy_received)
-x = f8(f7(f6(f5(f4(x)))))
- 
-predictions  = x
- 
- 
- 
- 
-def customLoss(y_true,y_pred):
-    y_true_50 = y_true[:,0:bit_length-1,:]
-    y_pred_50 = y_pred[:,0:bit_length-1,:]
-     
-    return K.binary_crossentropy(y_true_50, y_pred_50) #K.sum(K.log(yTrue) - K.log(yPred))
- 
- 
-model0 = Model(inputs=inputs, outputs=parity)
-optimizer= keras.optimizers.adam(lr=learning_rate,clipnorm=1.)
-model0.compile(optimizer=optimizer,loss=customLoss, metrics=[errors])
- 
- 
+# output of model_cw is encoder's power allocated codeword
 model_cw = Model(inputs=inputs, outputs=powerd_codeword)
-optimizer= keras.optimizers.adam(lr=learning_rate,clipnorm=1.)
+optimizer= keras.optimizers.adam(lr=0.02,clipnorm=1.)
 model_cw.compile(optimizer=optimizer,loss=customLoss, metrics=[errors])
  
- 
- 
+# output of model is decoder's estimate
 model = Model(inputs=inputs, outputs=predictions)
-optimizer= keras.optimizers.adam(lr=learning_rate,clipnorm=1.)
+optimizer= keras.optimizers.adam(lr=0.02,clipnorm=1.)
 model.compile(optimizer=optimizer,loss=customLoss, metrics=[errors])
 
- 
 id = str(bit_length)+'_'+str(fsSNR)+'_'+str(nsSNR)
  
-# Load!
- 
-if nsSNR == -2:
-    model.load_weights('power_nettype_rnnrate3tx_50_rx_50_len_101_20_-2.0_0.523126187246.h5',by_name=True)
-    print 'Load for -2dB power'
-elif nsSNR == -1:
-    #model.load_weights('power_nettype_rnnrate3tx_50_rx_50_len_101_20_-1.0_0.906540094873.h5',by_name=True)
-    #print 'Load for -1dB power'
-    model.load_weights('round4_powerabr_new_nettype_rnnrate3tx_50_rx_50_len_'+str(501)+'_20_-1.h5')
-    print 'Load previous -1dB length'
-    
-elif nsSNR == 0:
-    model.load_weights('power_nettype_rnnrate3tx_50_rx_50_len_101_20_0.0_0.116625772133.h5',by_name=True)
-    print 'load for 0dB power'
-elif nsSNR == 1:
-    model.load_weights('power_nettype_rnnrate3tx_50_rx_50_len_101_20_0.0_0.940006580573.h5',by_name=True)
-    print 'load for 1dB power'
-elif nsSNR == 2:
-    model.load_weights('power_nettype_rnnrate3tx_50_rx_50_len_101_20_2.0_0.605843714412.h5',by_name=True)
-    print 'load for 2dB power'
-elif nsSNR == -6:
-    model.load_weights('power_nettype_rnnrate3tx_50_rx_50_len_101_20_-6.0_0.938250914242.h5',by_name=True)
-    print 'load for -6dB power'
-
-    
-# Across round. 
-berss = []
-blerss = []
- 
-## TEST
-
-print 'k is ', k
+# Load model
 if '-fs' in n_inp:
-    model.load_weights('round3_powerabr_new_noisy_nettype_rnnrate3tx_50_rx_50_len_51_'+str(fsSNR)+'_0.h5')
+    model.load_weights('model/round3_powerabr_new_noisy_nettype_rnnrate3tx_50_rx_50_len_51_'+str(fsSNR)+'_0.h5')
     print 'model noise', str(fsSNR),'dB'
 else:
-    model.load_weights('round4_powerabr_new_nettype_rnnrate3tx_50_rx_50_len_51_20_'+str(nsSNR)+'.h5')
+    model.load_weights('model/round4_powerabr_new_nettype_rnnrate3tx_50_rx_50_len_51_20_'+str(nsSNR)+'.h5')
     print 'model', str(nsSNR),'dB'
     
 
+# Generate test examples: X_train (X_test) is true label. X_train_noise (X_test_noise) is input to the neural network
+# Generate test examples: information bits X_train (X_test)
 print 'Generate test examples'
-# Generate random bits
 X_train_raw = np.random.randint(0,2,k)
 X_test_raw  = np.random.randint(0,2,k)
 X_train = X_train_raw.reshape((k/bit_length, bit_length, 1))
 X_test  = X_test_raw.reshape((k/bit_length, bit_length, 1))
 
+# Generate test examples: input to the neural network X_train_noise (X_test_noise)
 # Input to neural network: message bits and noise sequence in Phase I(n_1,...,n_bitlength) and Phase II (m_1, o_1, m_2, o_2, ..., m_bitlength, o_bitlength)
-# Form the input as: X_train_noise[batch_index,i,:] = [b_i, n_i, m_{i-1}, o_{i-1}, n_i, m_i, o_i] for i = 1:bitlength 
+# Form the input as: X_train_noise[batch_index,i,:] = [b_i, n_i, m_{i-1}, o_{i-1}, n_i, m_i, o_i] for i = 1:bitlength
 
 X_train_noise = np.zeros([k/bit_length, bit_length, 2*coderate+1])
 X_train_noise[:,:,0] = X_train[:,:,0] # True message bits
-X_train_noise[:,bit_length-1,0] = np.zeros(X_train_noise[:,bit_length-1,0].shape) # Set Last Bit to be 0.
+X_train_noise[:,bit_length-1,0] = np.zeros(X_train_noise[:,bit_length-1,0].shape) # Set the last Bit to be 0.
 
-for inx in range(1,coderate+1):#HERE. BELOW.
+for inx in range(1,coderate+1):
     X_train_noise[:,:,coderate+inx] = noise_sigma * np.random.standard_normal(X_train_noise[:,:,coderate+inx].shape) # Noise
     if inx == 1:
         X_train_noise[:,:,inx] = np.roll(X_train_noise[:,:,coderate+inx], 0, axis=1) + feedback_sigma * np.random.standard_normal(X_train_noise[:,:,3].shape)  # Delayed Noise
@@ -412,7 +272,7 @@ for inx in range(1,coderate+1):#HERE. BELOW.
 
 X_test_noise = np.zeros([k/bit_length, bit_length,2*coderate+1])
 X_test_noise[:,:,0] = X_test[:,:,0] # True message bits
-X_test_noise[:,bit_length-1,0] = np.zeros(X_test_noise[:,bit_length-1,0].shape) # Set the Last Bit to be 0. 
+X_test_noise[:,bit_length-1,0] = np.zeros(X_test_noise[:,bit_length-1,0].shape) # Set the last Bit to be 0. 
 for inx in range(1,coderate+1):
     X_test_noise[:,:,coderate+inx] = noise_sigma * np.random.standard_normal(X_test_noise[:,:,coderate+inx].shape) # Noise
     if inx == 1:
@@ -421,37 +281,29 @@ for inx in range(1,coderate+1):
         X_test_noise[:,:,inx] = np.roll(X_test_noise[:,:,coderate+inx], 1, axis=1) + feedback_sigma * np.random.standard_normal(X_test_noise[:,:,4].shape)  # Delayed Noise
         X_test_noise[:,0,inx] = 0
 
-print '-------Evaluation start-------'
 
+print '-------Evaluation start-------'
 test_batch_size = 200
 codewords = model_cw.predict(X_test_noise, batch_size=test_batch_size)
 print 'power of codewords: ', np.var(codewords)
 print 'mean of codewords: ', np.mean(codewords)
 
-
+# print '-------Evaluation start: BER and BLER of decoder -------'
 predicted = np.round(model.predict(X_test_noise, batch_size=test_batch_size))
 predicted = predicted[:,0:bit_length-1,:] # Ignore the last bit (zero padding) 
  
-target    = X_test[:,0:bit_length-1,:].reshape([X_test.shape[0],X_test.shape[1]-1,1]) # Ignore the last bit (zero padding)
-
+target = X_test[:,0:bit_length-1,:].reshape([X_test.shape[0],X_test.shape[1]-1,1]) # Ignore the last bit (zero padding)
 # BER
 c_ber = 1- sum(sum(predicted == target))*\
        1.0/(target.shape[0] * target.shape[1] *target.shape[2])
-
 # BLER
 tp0 = (abs(np.round(predicted)-target)).reshape([target.shape[0],target.shape[1]]) 
 bler = sum(np.sum(tp0,axis=1)>0)*1.0/(target.shape[0])
 
-print 'test nn ber', c_ber[0]
-print 'test nn bler', bler
+print 'BER of decoder estimate: ', c_ber[0]
+print 'BLER of decoder estimate: ', bler
 
-
-
-# Save the BER and BLER
-if print_errors == True:
-    id = str(bit_length)+'_'+str(fsSNR)+'_'+str(nsSNR)    	
-    np.savetxt('mv_'+id+str(np.random.random())+'.txt', [c_ber[0], bler], delimiter=',')
-
-# Interpret
-if run_us == True:
-	execfile('us.py')
+# Interpret: generate Figure 5
+interpret = True
+if interpret == True:
+	execfile('interpret.py')
