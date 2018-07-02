@@ -5,16 +5,22 @@ Deepcode: Feedback Codes via Deep Learning, by Hyeji Kim, Yihan Jiang, Sreeram K
 # Noiseless feedback 
 
 python feedback_main.py -ns -1 : Forward SNR -1dB
+
 python feedback_main.py -ns 0  : Forward SNR  0dB
+
 python feedback_main.py -ns 1  : Forward SNR  1dB
+
 python feedback_main.py -ns 2  : Forward SNR  2dB
 
 
 # Noisy feedback
 
 python feedback_main.py -ns 0 -fs -3  : Forward SNR 0dB Feedback SNR -3dB
+
 python feedback_main.py -ns 0 -fs 3   : Forward SNR 0dB Feedback SNR  3dB
+
 python feedback_main.py -ns 0 -fs 10  : Forward SNR 0dB Feedback SNR 10dB
+
 python feedback_main.py -ns 0 -fs 20  : Forward SNR 0dB Feedback SNR 20dB
 
 
