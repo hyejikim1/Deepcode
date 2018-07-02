@@ -1,5 +1,6 @@
-# Feedback code simulation. 
-# Load presaved mean and variance! 
+__author__ = 'hyejikim'
+
+# Deepcode simulation. 
 import numpy as np
 import tensorflow as tf
 import keras
@@ -105,15 +106,6 @@ class ScaledLayer(Layer): # Power Allocation Layer
         self.W3 = self.add_weight(name = 'power_weight2', shape=(1,), # Power allocation for parity 2 stream
                                  initializer='ones', trainable=True)
          
-        self.g1 = self.add_weight(name = 'g1', shape=(1,), 
-                                 initializer='ones', trainable=True) # Power allocation for 1st bit
-        self.g2 = self.add_weight(name = 'g2', shape=(1,), 
-                                 initializer='ones', trainable=True) # Power allocation for 2nd bit
-        self.g3 = self.add_weight(name = 'g3', shape=(1,), 
-                                 initializer='ones', trainable=True) # Power allocation for 3rd bit
-        self.g4 = self.add_weight(name = 'g4', shape=(1,), 
-                                 initializer='ones', trainable=True) # Power allocation for 4th bit
- 
         self.b1 = self.add_weight(name = 'b1', shape=(1,), 
                                  initializer='ones', trainable=True) # Power allocation for last-4 bit
         self.b2 = self.add_weight(name = 'b2', shape=(1,), 
@@ -125,6 +117,16 @@ class ScaledLayer(Layer): # Power Allocation Layer
         self.b5 = self.add_weight(name = 'b5', shape=(1,), 
                                  initializer='ones', trainable=True) # Power allocation for last bit
   
+        self.g1 = self.add_weight(name = 'g1', shape=(1,), 
+                                 initializer='ones', trainable=True) # Power allocation for 1st bit
+        self.g2 = self.add_weight(name = 'g2', shape=(1,), 
+                                 initializer='ones', trainable=True) # Power allocation for 2nd bit
+        self.g3 = self.add_weight(name = 'g3', shape=(1,), 
+                                 initializer='ones', trainable=True) # Power allocation for 3rd bit
+        self.g4 = self.add_weight(name = 'g4', shape=(1,), 
+                                 initializer='ones', trainable=True) # Power allocation for 4th bit
+ 
+
         super(ScaledLayer, self).build(input_shape)
     def call(self, x, mask=None):
         sys = tf.reshape(tf.multiply(x[:,:,0], self.W),[tf.shape(x)[0],tf.shape(x)[1],1])
@@ -239,10 +241,10 @@ id = str(bit_length)+'_'+str(fsSNR)+'_'+str(nsSNR)
  
 # Load model
 if '-fs' in n_inp:
-    model.load_weights('model/round3_powerabr_new_noisy_nettype_rnnrate3tx_50_rx_50_len_51_'+str(fsSNR)+'_0.h5')
+    model.load_weights('model/round3_powerabr_new_noisy_nettype_rnnrate3tx_50_rx_50_len_51_'+str(fsSNR)+'_0.h5',by_name=True)
     print 'model noise', str(fsSNR),'dB'
 else:
-    model.load_weights('model/round4_powerabr_new_nettype_rnnrate3tx_50_rx_50_len_51_20_'+str(nsSNR)+'.h5')
+    model.load_weights('model/round4_powerabr_new_nettype_rnnrate3tx_50_rx_50_len_51_20_'+str(nsSNR)+'.h5',by_name=True)
     print 'model', str(nsSNR),'dB'
     
 
@@ -288,11 +290,10 @@ codewords = model_cw.predict(X_test_noise, batch_size=test_batch_size)
 print 'power of codewords: ', np.var(codewords)
 print 'mean of codewords: ', np.mean(codewords)
 
-# print '-------Evaluation start: BER and BLER of decoder -------'
 predicted = np.round(model.predict(X_test_noise, batch_size=test_batch_size))
 predicted = predicted[:,0:bit_length-1,:] # Ignore the last bit (zero padding) 
- 
 target = X_test[:,0:bit_length-1,:].reshape([X_test.shape[0],X_test.shape[1]-1,1]) # Ignore the last bit (zero padding)
+
 # BER
 c_ber = 1- sum(sum(predicted == target))*\
        1.0/(target.shape[0] * target.shape[1] *target.shape[2])
@@ -305,5 +306,40 @@ print 'BLER of decoder estimate: ', bler
 
 # Interpret: generate Figure 5
 interpret = True
+
 if interpret == True:
-	execfile('interpret.py')
+
+    r1 = X_test_noise[:,:,0] # b_i
+    n1 = X_test_noise[:,:,1] # N_i
+    n2 = X_test_noise[:,:,2] # M_{i-1}
+    n3 = X_test_noise[:,:,3] # O_{i-1}
+    p1 = codewords[:,:,1]    # Parity1_i
+    p2 = codewords[:,:,2]    # Parity2_i 
+    
+    num_sample_points = 20 # Number of sample points
+    rr1 = r1[0:num_sample_points,:] # b_i
+    nn1 = n1[0:num_sample_points,:] # N_i
+    nn2 = n2[0:num_sample_points,:] # M_{i-1}
+    nn3 = n3[0:num_sample_points,:] # O_{i-1}
+    pp1 = p1[0:num_sample_points,:] # Parity1_i
+    pp2 = p2[0:num_sample_points,:] # Parity2_i
+
+    plt.close()
+    plt.plot(nn1[rr1==0],pp1[rr1==0],'r.')
+    plt.plot(nn1[rr1==1],pp1[rr1==1],'bx')
+    plt.savefig('figs/SNR'+str(nsSNR)+'plot'+str(num_sample_points)+'_PhaseI_noise_vs_parity1.png')
+
+    plt.close()
+    plt.plot(nn1[rr1==0],pp2[rr1==0],'r.')
+    plt.plot(nn1[rr1==1],pp2[rr1==1],'bx')
+    plt.savefig('figs/SNR'+str(nsSNR)+'plot'+str(num_sample_points)+'_PhaseI_noise_vs_parity2.png')
+
+    plt.close()
+    plt.plot(pp1[rr1==0],pp2[rr1==0],'r.')
+    plt.plot(pp1[rr1==1],pp2[rr1==1],'bx')
+    plt.savefig('figs/SNR'+str(nsSNR)+'plot_'+str(num_sample_points)+'_parity1_vs_parity2.png')
+
+
+
+
+
